@@ -1,15 +1,16 @@
-#include "call.h"
-#include <QByteArray>
+#include "backend.h"
+#include "version.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QNetworkRequest>
-#include <QString>
+#include <QNetworkReply>
+#include <QUrl>
 
-APIClient::APIClient(QObject *parent)
-    : QObject(parent), m_apikey("enter your own key. dont be a prick :)") {}
-
-void APIClient::prompt(const QString &prompt) {
+Backend::Backend(QObject *parent)
+    : QObject(parent), m_apikey("enter your own key, dont be a prick :)") {}
+void Backend::prompt(const QString &prompt) {
+    m_busy = true;
+    emit busyChanged();
     QUrl url("https://generativelanguage.googleapis.com/v1beta/models/"
              "gemini-2.5-flash:generateContent");
     QNetworkRequest request(url);
@@ -22,10 +23,10 @@ void APIClient::prompt(const QString &prompt) {
     QByteArray data = QJsonDocument(body).toJson(QJsonDocument::Compact);
     QNetworkReply *reply = m_networkmanager.post(request, data);
     QObject::connect(reply, &QNetworkReply::finished, this,
-                     &APIClient::handleReply);
+                     &Backend::handleReply);
 }
-void APIClient::handleReply() {
-    auto *reply = qobject_cast<QNetworkReply *>(this->sender());
+void Backend::handleReply() {
+    auto *reply = qobject_cast<QNetworkReply *>((*this).sender());
     if (!reply)
         return;
     if ((*reply).error() == QNetworkReply::NoError) {
@@ -33,6 +34,8 @@ void APIClient::handleReply() {
         QJsonObject root = doc.object();
         QJsonArray candidates = root["candidates"].toArray();
         if (candidates.isEmpty()) {
+            m_busy = false;
+            emit busyChanged();
             emit error("No candidates in Gemini response.");
             return;
         }
@@ -48,5 +51,8 @@ void APIClient::handleReply() {
     } else {
         emit error((*reply).errorString());
     }
+    m_busy = false;
+    emit busyChanged();
     (*reply).deleteLater();
 }
+QString Backend::version() const { return APP_VERSION; }
