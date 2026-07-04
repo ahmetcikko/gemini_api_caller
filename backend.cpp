@@ -15,9 +15,17 @@ Backend::Backend(QObject *parent)
     m_config.sampleRate = 16000;
     m_config.dataCallback = call_back;
     m_config.pUserData = this;
+    if (ma_context_init(nullptr, 0, nullptr, &(*this).m_context) !=
+        MA_SUCCESS) {
+        qDebug() << "Error for context_init() function";
+    }
+    enumerate_devices();
     ma_device_init(nullptr, &m_config, &m_device);
 }
-Backend::~Backend() { ma_device_uninit(&m_device); }
+Backend::~Backend() {
+    ma_device_uninit(&m_device);
+    ma_context_uninit(&m_context);
+}
 void Backend::prompt(const QString &prompt) {
     m_busy = true;
     emit busyChanged();
@@ -121,5 +129,22 @@ void Backend::stopRecording() {
     QNetworkReply *reply = m_networkmanager.post(request, data);
     QObject::connect(reply, &QNetworkReply::finished, this,
                      &Backend::handleReply);
+}
+void Backend::enumerate_devices() {
+    m_devicenames.clear();
+    if (ma_context_get_devices(&(*this).m_context, nullptr, nullptr,
+                               &(*this).m_captureinfos,
+                               &(*this).m_capturecount) != MA_SUCCESS) {
+        qDebug() << "Error during getting devices.";
+    }
+    for (ma_uint32 device = 0; device < (*this).m_capturecount; device++) {
+        (*this).m_devicenames.append((*this).m_captureinfos[device].name);
+    }
+    emit device_names_changed();
+}
+void Backend::select_device(int index) {
+    m_config.capture.pDeviceID = &m_captureinfos[index].id;
+    ma_device_uninit(&m_device);
+    ma_device_init(&m_context, &m_config, &m_device);
 }
 QString Backend::version() const { return APP_VERSION; }

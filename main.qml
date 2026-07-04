@@ -141,6 +141,59 @@ Window {
             }
         }
     }
+    Popup {
+        id: devicePicker
+        anchors.centerIn: parent
+        modal: true
+        visible: false
+        background: Rectangle {
+            radius: window.width * 0.04
+            color: "#2c2c2e"
+            border.color: "#26ffffff"
+            border.width: 1
+        }
+        contentItem: Column {
+            spacing: window.height * 0.015
+            padding: window.width * 0.04
+            Text {
+                text: "Select Microphone"
+                color: "#99ffffff"
+                font.pixelSize: window.height * 0.02
+            }
+            Repeater {
+                model: backend.devicenames
+                delegate: Rectangle {
+                    width: window.width * 0.5
+                    height: window.height * 0.07
+                    radius: window.width * 0.03
+                    color: deviceMouseArea.pressed ? "#2effffff" : "#12ffffff"
+                    border.color: "#26ffffff"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Text {
+                        anchors.centerIn: parent
+                        text: modelData
+                        color: "#ffffff"
+                        font.pixelSize: window.height * 0.022
+                        wrapMode: Text.Wrap
+                        width: parent.width * 0.9
+                        horizontalAlignment: Text.AlignHCenter
+                    }
+                    MouseArea {
+                        id: deviceMouseArea
+                        anchors.fill: parent
+                        onClicked: {
+                            backend.select_device(index)
+                            devicePicker.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Component.onCompleted: {
+        if (backend.devicenames.length > 1) devicePicker.open()
+    }
     Text {
         text: "Version " + backend.version()
         color: "#b0adad"
