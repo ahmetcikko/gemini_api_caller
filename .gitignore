@@ -2,3 +2,5 @@ AI Caller.exe
 build/
 .cache/
 .vscode/
+miniaudio.h
+dr_wav.h

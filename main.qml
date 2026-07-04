@@ -7,6 +7,7 @@ Window {
     visible: true
     width: Screen.desktopAvailableWidth * 0.25
     height: Screen.desktopAvailableHeight * 0.6
+    property bool recording: false
     minimumWidth: width
     maximumWidth: width
     minimumHeight: height
@@ -78,29 +79,63 @@ Window {
                     }
                 }
             }
-            Rectangle {
-                Layout.preferredWidth: window.height * 0.15
-                Layout.preferredHeight: window.height * 0.15
-                radius: window.width * 0.04
-                color: sendMouseArea.pressed ? "#2effffff" : "#12ffffff"
-                border.color: "#26ffffff"
-                border.width: 1
-                Behavior on color { ColorAnimation { duration: 100 } }
-                Image {
-                    source: "qrc:/send.svg"
-                    width: parent.width * 0.5
-                    height: width
-                    anchors.centerIn: parent
-                    opacity: backend.busy ? 0.3 : 1.0
+            ColumnLayout {    
+                Rectangle {
+                    Layout.preferredWidth: window.height * 0.12
+                    Layout.preferredHeight: window.height * 0.12
+                    radius: window.width * 0.04
+                    color: textMouseArea.pressed ? "#2effffff" : "#12ffffff"
+                    border.color: "#26ffffff"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Image {
+                        source: "qrc:/send.svg"
+                        width: parent.width * 0.5
+                        height: width
+                        anchors.centerIn: parent
+                        opacity: backend.busy ? 0.3 : 1.0
+                    }
+                    MouseArea {
+                        id: textMouseArea
+                        anchors.fill: parent
+                        enabled: !backend.busy
+                        onClicked: {
+                            if (userInput.text.trim() === "") return
+                            backend.prompt(userInput.text)
+                            userInput.text = ""
+                        }
+                    }
                 }
-                MouseArea {
-                    id: sendMouseArea
-                    anchors.fill: parent
-                    enabled: !backend.busy
-                    onClicked: {
-                        if (userInput.text.trim() === "") return
-                        backend.prompt(userInput.text)
-                        userInput.text = ""
+                Rectangle {
+                    id: micBtn
+                    Layout.preferredWidth: window.height * 0.12
+                    Layout.preferredHeight: window.height * 0.12
+                    radius: window.width * 0.04
+                    color: recording ? "#cf1010" : (micMouseArea.pressed ? "#2effffff" : "#12ffffff")
+                    border.color: "#26ffffff"
+                    border.width: 1
+                    Behavior on color { ColorAnimation { duration: 100 } }
+                    Image {
+                        source: "qrc:/mic.svg"
+                        width: parent.width * 0.5
+                        height: width
+                        anchors.centerIn: parent
+                        opacity: backend.busy ? 0.3 : 1.0
+                    }
+                    MouseArea {
+                        id: micMouseArea
+                        anchors.fill: parent
+                        enabled: !backend.busy
+                        onClicked: {
+                            if (recording) {
+                                backend.stopRecording()
+                                recording = false
+                            }
+                            else {
+                                backend.startRecording()
+                                recording = true
+                            }
+                        }
                     }
                 }
             }
