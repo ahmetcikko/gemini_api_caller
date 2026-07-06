@@ -4,3 +4,4 @@ build/
 .vscode/
 miniaudio.h
 dr_wav.h
+lib/

@@ -147,4 +147,5 @@ void Backend::select_device(int index) {
     ma_device_uninit(&m_device);
     ma_device_init(&m_context, &m_config, &m_device);
 }
+bool Backend::busy() const { return m_busy; }
 QString Backend::version() const { return APP_VERSION; }

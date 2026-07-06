@@ -19,7 +19,7 @@ class Backend : public QObject {
     Q_INVOKABLE void select_device(int index);
     Q_PROPERTY(QStringList devicenames MEMBER m_devicenames NOTIFY
                    device_names_changed);
-    bool busy() const { return m_busy; }
+    bool busy() const;
   signals:
     void responseReceived(const QString &response);
     void error(const QString &errorstring);

@@ -12,7 +12,7 @@ Window {
     maximumWidth: width
     minimumHeight: height
     maximumHeight: height
-    title: "Gemini Chatbot"
+    title: "Pardus Jarvis"
     Rectangle {
         anchors.fill: parent
         gradient: Gradient {
