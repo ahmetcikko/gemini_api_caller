@@ -1,7 +1,6 @@
-AI Caller.exe
 build/
 .cache/
 .vscode/
-miniaudio.h
-dr_wav.h
 lib/
+ggml-*.bin
+app/apikey.h

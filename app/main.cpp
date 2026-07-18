@@ -11,6 +11,6 @@ int main(int argc, char *argv[]) {
     Backend backend;
     QQmlApplicationEngine engine;
     (*engine.rootContext()).setContextProperty("backend", &backend);
-    engine.load(QUrl("qrc:/main.qml"));
+    engine.load(QUrl("qrc:/app/main.qml"));
     return app.exec();
 }
