@@ -39,6 +39,7 @@ class Backend : public QObject {
 
   private:
     void setState(const QString &s);
+    void send_llm(const QString &system, const QString &user);
     void dispatch(const QString &content);
     void finish(const QString &text, int displayMs, const QString &kind);
     void close();
@@ -51,6 +52,8 @@ class Backend : public QObject {
     QNetworkAccessManager m_networkmanager;
     QString m_apikey;
     QString m_applist;
+    QString m_stage;
+    QString m_input;
     QByteArray m_audiodata;
     std::vector<DesktopApp> m_apps;
     ma_context m_context;

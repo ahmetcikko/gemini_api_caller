@@ -9,13 +9,16 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QUrl>
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <linux/limits.h>
+#include <signal.h>
 #include <string>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -28,25 +31,45 @@ static constexpr std::int64_t kSilenceStopMs = 1300;
 static constexpr std::int64_t kNoSpeechCloseMs = 5000;
 static constexpr float kVoiceRmsThreshold = 0.012f;
 static constexpr int kMaxTokens = 512;
-static const char *kPromptA =
+static const char *kPromptRoute =
     "You are Pardus Jarvis, a voice assistant for Pardus Linux. Input is "
     "Turkish speech transcribed by Whisper. "
     "Reply with ONE JSON object only.\n"
-    "Installed applications: ";
-static const char *kPromptB =
-    "\nIf the user wants an application opened, launched or run, reply "
-    "{\"action\":\"open_app\",\"target\":\"<name copied exactly from the "
-    "list>\"} - pick the app the user means even if their words differ. If "
-    "they want a website: {\"action\":\"open_url\",\"target\":\"<https "
-    "url>\"}. Chat ONLY if the request has nothing to do with opening "
-    "anything: {\"action\":\"chat\",\"reply\":\"<short Turkish answer>\"}.\n"
+    "Decide the user's intent:\n"
+    "open/launch/run an application -> {\"action\":\"open_app\"}\n"
+    "open a website -> {\"action\":\"open_url\",\"target\":\"<https url>\"}\n"
+    "close/quit/kill an application -> {\"action\":\"close_app\"}\n"
+    "change the sound volume -> "
+    "{\"action\":\"volume\",\"target\":\"<0-100|up|down|mute|unmute>\"} - a "
+    "number when they name a level, up/down for louder/quieter, mute/unmute "
+    "for silencing.\n"
+    "reboot/shut down/sleep the whole COMPUTER (only if explicitly named, "
+    "e.g. 'bilgisayari kapat', 'sistemi kapat' - bare 'kapat'/'close' alone "
+    "is close_app, not this) -> "
+    "{\"action\":\"system_power\",\"target\":\"<reboot|shutdown|sleep>\"}\n"
+    "anything else -> {\"action\":\"chat\",\"reply\":\"<short Turkish "
+    "answer>\"}\n"
     "IMPORTANT: polite question forms like 'acar misin', 'acabilir misin', "
     "'can you open' are REQUESTS, not real questions about your ability. "
-    "Always perform the action itself, never reply confirming you are able "
-    "to do it.\n"
-    "Example:\n"
-    "'Firefox'u acabilir misin' -> "
-    "{\"action\":\"open_app\",\"target\":\"Firefox\"}\n";
+    "Always pick the action, never chat about being able to do it.\n"
+    "Examples:\n"
+    "'Firefox'u acabilir misin' -> {\"action\":\"open_app\"}\n"
+    "'bilgisayari kapat' -> "
+    "{\"action\":\"system_power\",\"target\":\"shutdown\"}\n";
+static const char *kPromptOpenA =
+    "You are Pardus Jarvis, a voice assistant for Pardus Linux. The user "
+    "wants an application opened. Installed applications: ";
+static const char *kPromptOpenB =
+    "\nReply with ONE JSON object only: "
+    "{\"action\":\"open_app\",\"target\":\"<name copied exactly from the "
+    "list>\"} - pick the app the user means even if their words differ.";
+static const char *kPromptCloseA =
+    "You are Pardus Jarvis, a voice assistant for Pardus Linux. The user "
+    "wants an application closed. Currently running applications: ";
+static const char *kPromptCloseB =
+    "\nReply with ONE JSON object only: "
+    "{\"action\":\"close_app\",\"target\":\"<name copied exactly from the "
+    "list>\"} - pick the app the user means even if their words differ.";
 
 static ma_decoder g_sounddecoder;
 static ma_device g_sounddevice;
@@ -231,6 +254,103 @@ static bool launch_app(const DesktopApp &app) {
         return false;
     return spawn(args);
 }
+static bool is_critical_comm(const QString &comm) {
+    static const std::vector<QString> critical = {"systemd",
+                                                  "init",
+                                                  "dbus-daemon",
+                                                  "dbus-broker",
+                                                  "gnome-shell",
+                                                  "kwin_x11",
+                                                  "kwin_wayland",
+                                                  "plasmashell",
+                                                  "Xorg",
+                                                  "Xwayland",
+                                                  "gdm",
+                                                  "gdm3",
+                                                  "lightdm",
+                                                  "sddm",
+                                                  "pipewire",
+                                                  "pipewire-pulse",
+                                                  "wireplumber",
+                                                  "NetworkManager",
+                                                  "polkitd",
+                                                  "systemd-logind",
+                                                  "Pardus Jarvis",
+                                                  "Pardus-Jarvis-Daemon",
+                                                  "Pardus-Jarvis-Settings"};
+    for (const QString &name : critical)
+        if (comm.compare(name, Qt::CaseInsensitive) == 0)
+            return true;
+    return false;
+}
+static bool terminate_comm(const QString &name) {
+    if (is_critical_comm(name))
+        return false;
+    QString short15 = name.left(15);
+    bool any = false;
+    std::error_code ec;
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator("/proc", ec)) {
+        std::string pidname = entry.path().filename().string();
+        if (pidname.find_first_not_of("0123456789") != std::string::npos)
+            continue;
+        std::ifstream f("/proc/" + pidname + "/comm");
+        std::string comm;
+        std::getline(f, comm);
+        QString c = QString::fromStdString(comm);
+        if (c.compare(name, Qt::CaseInsensitive) != 0 &&
+            c.compare(short15, Qt::CaseInsensitive) != 0)
+            continue;
+        if (is_critical_comm(c))
+            continue;
+        if (kill(std::stoi(pidname), SIGTERM) == 0)
+            any = true;
+    }
+    return any;
+}
+static QString running_apps() {
+    std::unordered_map<QString, std::uint64_t> apps;
+    long page = sysconf(_SC_PAGESIZE);
+    std::error_code ec;
+    for (const std::filesystem::directory_entry &entry :
+         std::filesystem::directory_iterator("/proc", ec)) {
+        std::string name = entry.path().filename().string();
+        if (name.find_first_not_of("0123456789") != std::string::npos)
+            continue;
+        struct stat st;
+        if (stat(("/proc/" + name).c_str(), &st) != 0 || st.st_uid != getuid())
+            continue;
+        std::ifstream cmd("/proc/" + name + "/cmdline");
+        std::string arg0;
+        std::getline(cmd, arg0, '\0');
+        if (arg0.empty())
+            continue;
+        std::ifstream cf("/proc/" + name + "/comm");
+        std::string comm;
+        std::getline(cf, comm);
+        if (comm.empty())
+            continue;
+        QString qc = QString::fromStdString(comm);
+        if (is_critical_comm(qc))
+            continue;
+        std::ifstream sm("/proc/" + name + "/statm");
+        std::uint64_t sz = 0, rss = 0;
+        sm >> sz >> rss;
+        std::uint64_t bytes = rss * std::uint64_t(page);
+        auto it = apps.find(qc);
+        if (it == apps.end() || bytes > (*it).second)
+            apps[qc] = bytes;
+    }
+    std::vector<std::pair<std::uint64_t, QString>> sorted;
+    for (const auto &a : apps)
+        sorted.push_back({a.second, a.first});
+    std::sort(sorted.begin(), sorted.end(),
+              [](const auto &x, const auto &y) { return x.first > y.first; });
+    QStringList names;
+    for (size_t i = 0; i < sorted.size() && i < 40; i++)
+        names.append(sorted[i].second);
+    return names.join(", ");
+}
 static bool open_url(const QString &url) {
     QString u = url.trimmed();
     if (u.isEmpty())
@@ -409,30 +529,30 @@ void Backend::stopRecording() {
                 finish("Sizi duyamadım.", 2000, "error");
                 return;
             }
-            QUrl url("https://api.groq.com/openai/v1/chat/completions");
-            QNetworkRequest request(url);
-            request.setHeader(QNetworkRequest::ContentTypeHeader,
-                              "application/json");
-            request.setRawHeader("Authorization",
-                                 "Bearer " + m_apikey.toUtf8());
-            request.setTransferTimeout(15000);
-            QJsonObject body{
-                {"model", "llama-3.1-8b-instant"},
-                {"temperature", 0},
-                {"max_tokens", kMaxTokens},
-                {"response_format", QJsonObject{{"type", "json_object"}}},
-                {"messages",
-                 QJsonArray{QJsonObject{{"role", "system"},
-                                        {"content", QString(kPromptA) +
-                                                        m_applist + kPromptB}},
-                            QJsonObject{{"role", "user"}, {"content", t}}}}};
-            QByteArray data =
-                QJsonDocument(body).toJson(QJsonDocument::Compact);
-            QNetworkReply *reply = m_networkmanager.post(request, data);
-            QObject::connect(reply, &QNetworkReply::finished, this,
-                             &Backend::handleReply);
+            m_input = t;
+            m_stage = "route";
+            send_llm(QString(kPromptRoute), t);
         });
     }).detach();
+}
+void Backend::send_llm(const QString &system, const QString &user) {
+    QUrl url("https://api.groq.com/openai/v1/chat/completions");
+    QNetworkRequest request(url);
+    request.setHeader(QNetworkRequest::ContentTypeHeader, "application/json");
+    request.setRawHeader("Authorization", "Bearer " + m_apikey.toUtf8());
+    request.setTransferTimeout(15000);
+    QJsonObject body{
+        {"model", "llama-3.1-8b-instant"},
+        {"temperature", 0},
+        {"max_tokens", kMaxTokens},
+        {"response_format", QJsonObject{{"type", "json_object"}}},
+        {"messages",
+         QJsonArray{QJsonObject{{"role", "system"}, {"content", system}},
+                    QJsonObject{{"role", "user"}, {"content", user}}}}};
+    QByteArray data = QJsonDocument(body).toJson(QJsonDocument::Compact);
+    QNetworkReply *reply = m_networkmanager.post(request, data);
+    QObject::connect(reply, &QNetworkReply::finished, this,
+                     &Backend::handleReply);
 }
 void Backend::handleReply() {
     auto *reply = qobject_cast<QNetworkReply *>((*this).sender());
@@ -460,6 +580,17 @@ void Backend::dispatch(const QString &content) {
     if (a >= 0 && b > a)
         obj = QJsonDocument::fromJson(raw.mid(a, b - a + 1).toUtf8()).object();
     QString action = obj["action"].toString();
+    if (m_stage == "route" && action == "open_app") {
+        m_stage = "open";
+        send_llm(QString(kPromptOpenA) + m_applist + kPromptOpenB, m_input);
+        return;
+    }
+    if (m_stage == "route" && action == "close_app") {
+        m_stage = "close";
+        send_llm(QString(kPromptCloseA) + running_apps() + kPromptCloseB,
+                 m_input);
+        return;
+    }
     if (action == "open_app") {
         QString target = obj["target"].toString().trimmed();
         if (looks_like_url(target)) {
@@ -472,6 +603,52 @@ void Backend::dispatch(const QString &content) {
                 finish("\"" + target + "\" bulunamadı.", 3000, "error");
         } else {
             finish("\"" + target + "\" bulunamadı.", 3000, "error");
+        }
+    } else if (action == "close_app") {
+        QString target = obj["target"].toString().trimmed();
+        if (terminate_comm(target))
+            finish(target + " kapatılıyor…", 2200, "action");
+        else
+            finish("\"" + target + "\" çalışmıyor.", 3000, "error");
+    } else if (action == "volume") {
+        QString t = obj["target"].toString().trimmed().toLower();
+        if (t == "mute") {
+            spawn({"pactl", "set-sink-mute", "@DEFAULT_SINK@", "1"});
+            finish("Ses kapatıldı.", 2200, "action");
+        } else if (t == "unmute") {
+            spawn({"pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"});
+            finish("Ses açıldı.", 2200, "action");
+        } else if (t == "up") {
+            spawn({"pactl", "set-sink-volume", "@DEFAULT_SINK@", "+10%"});
+            finish("Ses yükseltildi.", 2200, "action");
+        } else if (t == "down") {
+            spawn({"pactl", "set-sink-volume", "@DEFAULT_SINK@", "-10%"});
+            finish("Ses kısıldı.", 2200, "action");
+        } else {
+            bool okNum = false;
+            int level = t.remove('%').toInt(&okNum);
+            if (okNum && level >= 0 && level <= 100) {
+                spawn({"pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"});
+                spawn({"pactl", "set-sink-volume", "@DEFAULT_SINK@",
+                       QString::number(level) + "%"});
+                finish("Ses %" + QString::number(level) + ".", 2200, "action");
+            } else {
+                finish("Anlayamadım.", 2200, "error");
+            }
+        }
+    } else if (action == "system_power") {
+        QString t = obj["target"].toString().trimmed().toLower();
+        if (t == "shutdown") {
+            spawn({"systemctl", "poweroff"});
+            finish("Bilgisayar kapatılıyor…", 2500, "action");
+        } else if (t == "reboot") {
+            spawn({"systemctl", "reboot"});
+            finish("Bilgisayar yeniden başlatılıyor…", 2500, "action");
+        } else if (t == "sleep") {
+            spawn({"systemctl", "suspend"});
+            finish("Uyku moduna geçiliyor…", 2500, "action");
+        } else {
+            finish("Anlayamadım.", 2200, "error");
         }
     } else if (action == "open_url") {
         open_url(obj["target"].toString());
