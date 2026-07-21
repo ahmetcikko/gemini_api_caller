@@ -55,7 +55,7 @@ Kaynaktan derlerken varsayılan Groq API anahtarını `app/apikey.h` dosyasında
 ```
 cd build
 cpack
-sudo dpkg -i pardusjarvis_1.3.0_amd64.deb
+sudo dpkg -i pardusjarvis_1.4.2_amd64.deb
 sudo apt install -f
 ```
 
@@ -144,7 +144,7 @@ When building from source, you can set the default Groq API key in the `kDefault
 ```
 cd build
 cpack
-sudo dpkg -i pardusjarvis_1.3.0_amd64.deb
+sudo dpkg -i pardusjarvis_1.4.2_amd64.deb
 sudo apt install -f
 ```
 
